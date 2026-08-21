@@ -845,7 +845,52 @@ consume_csi_digit_run(ParsedCSI *csi, const uint8_t *buf, size_t *pos, const siz
 }
 
 static bool
+parse_rgb_component(const uint8_t *buf, size_t sz, size_t *pos, int *value) {
+    size_t p = *pos;
+    unsigned v = 0, digits = 0;
+    while (p < sz && (uint8_t)(buf[p] - '0') <= 9 && digits < 3) {
+        v = v * 10 + (buf[p++] - '0');
+        digits++;
+    }
+    if (!digits || v > 255 || (p < sz && (uint8_t)(buf[p] - '0') <= 9)) return false;
+    *pos = p;
+    *value = (int)v;
+    return true;
+}
+
+static bool
+consume_simple_rgb_sgr(ParsedCSI *csi, const uint8_t *buf, size_t *pos, size_t sz) {
+    size_t p = *pos;
+    if (csi->state != CSI_START || p + 9 > sz) return false;
+    int color_code = 0;
+    if (p + 5 <= sz && buf[p] == '3' && buf[p + 1] == '8' && buf[p + 2] == ';' &&
+        buf[p + 3] == '2' && buf[p + 4] == ';') color_code = 38;
+    else if (p + 5 <= sz && buf[p] == '4' && buf[p + 1] == '8' && buf[p + 2] == ';' &&
+             buf[p + 3] == '2' && buf[p + 4] == ';') color_code = 48;
+    else if (p + 5 <= sz && buf[p] == '5' && buf[p + 1] == '8' && buf[p + 2] == ';' &&
+             buf[p + 3] == '2' && buf[p + 4] == ';') color_code = 58;
+    else return false;
+    p += 5;
+    int red = 0, green = 0, blue = 0;
+    if (!parse_rgb_component(buf, sz, &p, &red) || p >= sz || buf[p++] != ';' ||
+        !parse_rgb_component(buf, sz, &p, &green) || p >= sz || buf[p++] != ';' ||
+        !parse_rgb_component(buf, sz, &p, &blue) || p >= sz || buf[p++] != 'm') return false;
+    csi->params[0] = color_code;
+    csi->params[1] = 2;
+    csi->params[2] = red;
+    csi->params[3] = green;
+    csi->params[4] = blue;
+    memset(csi->is_sub_param, 0, 5);
+    csi->num_params = 5;
+    csi->trailer = 'm';
+    csi->is_valid = true;
+    *pos = p;
+    return true;
+}
+
+static bool
 csi_parse_loop(PS *self, ParsedCSI *csi, const uint8_t *buf, size_t *pos, const size_t sz, const size_t start) {
+    if (consume_simple_rgb_sgr(csi, buf, pos, sz)) return true;
     while (*pos < sz) {
         const uint8_t ch = buf[*pos];
         *pos += 1;

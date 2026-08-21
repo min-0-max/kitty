@@ -727,6 +727,8 @@ def init_env(
 
     if native_optimizations and ba.isa in (ISA.AMD64, ISA.X86):
         cflags.extend('-march=native -mtune=native'.split())
+    elif native_optimizations and ba.isa == ISA.ARM64 and is_macos:
+        cflags.append('-mcpu=native')
 
     ans = Env(
         cc,
@@ -1420,7 +1422,7 @@ def build_shaders(args: Options, kitty_exe: str, for_freeze: bool) -> None:
         shutil.copytree('shaders', os.path.join(libdir, 'shaders'), dirs_exist_ok=True)
 
 
-def build(args: Options, native_optimizations: bool = True, call_init: bool = True) -> None:
+def build_fast_data_types(args: Options, native_optimizations: bool = True, call_init: bool = True) -> None:
     if call_init:
         init_env_from_args(args, native_optimizations)
 
@@ -1435,9 +1437,45 @@ def build(args: Options, native_optimizations: bool = True, call_init: bool = Tr
         headers,
         build_dsym=args.build_dsym,
     )
+
+
+def build(args: Options, native_optimizations: bool = True, call_init: bool = True) -> None:
+    build_fast_data_types(args, native_optimizations, call_init)
     compile_glfw(args.compilation_database, args.build_dsym)
     compile_kittens(args)
     add_builtin_fonts(args)
+
+
+def build_kitty_provider_sdk() -> None:
+    import sysconfig
+
+    root = os.path.join(build_dir, 'kitty-provider')
+    if os.path.exists(root):
+        shutil.rmtree(root)
+    include = os.path.join(root, 'include')
+    library = os.path.join(root, 'lib')
+    package = os.path.join(root, 'python', 'kitty')
+    for directory in (include, library, package):
+        os.makedirs(directory, exist_ok=True)
+    obj = os.path.join(build_dir, 'kitty-provider.o')
+    subprocess.check_call([
+        *env.cc, '-std=c11', '-O3', '-fvisibility=hidden',
+        '-I' + sysconfig.get_paths()['include'],
+        '-c', 'kitty/provider.c', '-o', obj,
+    ])
+    archive = os.path.join(library, 'libkitty_provider.a')
+    subprocess.check_call(['ar', 'rcs', archive, obj])
+    shutil.copy2('kitty/provider.h', os.path.join(include, 'provider.h'))
+    shutil.copy2('kitty/__init__.py', os.path.join(package, '__init__.py'))
+    shutil.copy2('kitty/fast_data_types.so', os.path.join(package, 'fast_data_types.so'))
+    with open(os.path.join(root, 'python-config.json'), 'w') as output:
+        json.dump({
+            'library_dir': os.path.abspath(os.path.join(root, 'runtime', 'lib')),
+            'library': 'python' + sysconfig.get_config_var('VERSION'),
+            'executable': sys.executable,
+        }, output, sort_keys=True)
+    if is_macos:
+        subprocess.check_call([sys.executable, 'kitty/provider_bundle.py', root, os.path.join(package, 'fast_data_types.so')])
 
 
 def safe_makedirs(path: str) -> None:
@@ -2249,6 +2287,8 @@ def option_parser() -> argparse.ArgumentParser:  # {{{
         default=Options.action,
         choices=(
             'build',
+            'fast-data-types',
+            'kitty-provider-sdk',
             'test',
             'develop',
             'linux-package',
@@ -2483,6 +2523,13 @@ def do_build(args: Options) -> None:
             else:
                 build_launcher(args, launcher_dir=launcher_dir)
                 build_static_kittens(args, launcher_dir=launcher_dir)
+        elif args.action == 'fast-data-types':
+            build_fast_data_types(args)
+            args.compilation_database.build_all()
+        elif args.action == 'kitty-provider-sdk':
+            build_fast_data_types(args)
+            args.compilation_database.build_all()
+            build_kitty_provider_sdk()
         elif args.action == 'develop':
             build(args)
             build_launcher(args, launcher_dir=launcher_dir, bundle_type='develop')

@@ -24,7 +24,7 @@ typedef struct DnDCommand {
 } DnDCommand;
 
 typedef struct {
-    bool mLNM, mIRM, mDECTCEM, mDECSCNM, mDECOM, mDECAWM, mDECCOLM, mDECARM, mDECCKM, mCOLOR_PREFERENCE_NOTIFICATION, mBRACKETED_PASTE, mFOCUS_TRACKING,
+    bool mLNM, mIRM, mDECTCEM, mDECSCNM, mDECOM, mDECAWM, mDECCOLM, mDECARM, mDECCKM, mDECKPAM, mALTERNATE_SCROLL, mCOLOR_PREFERENCE_NOTIFICATION, mBRACKETED_PASTE, mFOCUS_TRACKING,
         mDECSACE, mHANDLE_TERMIOS_SIGNALS, mINBAND_RESIZE_NOTIFICATION, mPASTE_EVENTS, mVISIBILITY_REPORTS;
     MouseTrackingMode mouse_tracking_mode;
     MouseTrackingProtocol mouse_tracking_protocol;
@@ -151,6 +151,7 @@ typedef struct {
 
     uint8_t *write_buf;
     size_t write_buf_sz, write_buf_used;
+    uint64_t suppressed_replies;
     pthread_mutex_t write_buf_lock;
 
     CursorRenderInfo cursor_render_info;

@@ -1719,6 +1719,7 @@ write_to_child(Screen *self, const char *data, size_t sz) {
     bool written = false;
     if (self->window_id) written = schedule_write_to_child(self->window_id, 1, data, sz);
     if (self->test_child != Py_None) { write_to_test_child(self, data, sz); }
+    if (!written && self->test_child == Py_None && sz) self->suppressed_replies++;
     return written;
 }
 
@@ -1755,6 +1756,7 @@ write_escape_code_to_child(Screen *self, unsigned char which, const char *data) 
         write_to_test_child(self, data, strlen(data));
         if (suffix[0]) write_to_test_child(self, suffix, strlen(suffix));
     }
+    if (!written && self->test_child == Py_None) self->suppressed_replies++;
     return written;
 }
 
@@ -1962,9 +1964,9 @@ screen_toggle_screen_buffer(Screen *self, bool save_cursor, bool clear_alt_scree
 }
 
 void
-screen_normal_keypad_mode(Screen UNUSED *self) {} // Not implemented as this is handled by the GUI
+screen_normal_keypad_mode(Screen *self) { self->modes.mDECKPAM = false; }
 void
-screen_alternate_keypad_mode(Screen UNUSED *self) {} // Not implemented as this is handled by the GUI
+screen_alternate_keypad_mode(Screen *self) { self->modes.mDECKPAM = true; }
 
 static void
 set_mode_from_const(Screen *self, unsigned int mode, bool val) {
@@ -1982,6 +1984,7 @@ set_mode_from_const(Screen *self, unsigned int mode, bool val) {
         SIMPLE_MODE(DECARM)
         SIMPLE_MODE(BRACKETED_PASTE)
         SIMPLE_MODE(FOCUS_TRACKING)
+        SIMPLE_MODE(ALTERNATE_SCROLL)
         SIMPLE_MODE(COLOR_PREFERENCE_NOTIFICATION)
         SIMPLE_MODE(HANDLE_TERMIOS_SIGNALS)
         MOUSE_MODE(MOUSE_BUTTON_TRACKING, mouse_tracking_mode, BUTTON_MODE)
@@ -6834,6 +6837,106 @@ test_parse_written_data(Screen *screen, PyObject *args) {
 }
 
 static PyObject *
+provider_feed(Screen *screen, PyObject *input) {
+    RAII_PY_BUFFER(source);
+    if (PyObject_GetBuffer(input, &source, PyBUF_SIMPLE) != 0) return NULL;
+    size_t offset = 0;
+    while (offset < (size_t)source.len) {
+        size_t capacity = 0;
+        uint8_t *destination = vt_parser_create_write_buffer(screen->vt_parser, &capacity);
+        const size_t count = MIN(capacity, (size_t)source.len - offset);
+        memcpy(destination, (const uint8_t *)source.buf + offset, count);
+        vt_parser_commit_write(screen->vt_parser, count);
+        ParseData data = {.now = monotonic()};
+        parse_worker(screen, &data, true);
+        offset += count;
+    }
+    Py_RETURN_NONE;
+}
+
+__attribute__((visibility("default"))) int
+kitty_provider_screen_feed(PyObject *screen_object, const uint8_t *data, size_t length) {
+    Screen *screen = (Screen *)screen_object;
+    size_t offset = 0;
+    while (offset < length) {
+        size_t capacity = 0;
+        uint8_t *destination = vt_parser_create_write_buffer(screen->vt_parser, &capacity);
+        const size_t count = MIN(capacity, length - offset);
+        memcpy(destination, data + offset, count);
+        vt_parser_commit_write(screen->vt_parser, count);
+        ParseData parse = {.now = monotonic()};
+        parse_worker(screen, &parse, true);
+        offset += count;
+    }
+    return 0;
+}
+
+static PyObject *
+provider_snapshot(Screen *screen, PyObject *args UNUSED) {
+    uint32_t modes = 0;
+#define PROVIDER_MODE(bit, condition) \
+    do { if (condition) modes |= 1u << bit; } while (0)
+    PROVIDER_MODE(0, screen->modes.mBRACKETED_PASTE);
+    PROVIDER_MODE(1, screen->modes.mDECCKM);
+    PROVIDER_MODE(2, screen->modes.mDECKPAM);
+    PROVIDER_MODE(3, screen->modes.mouse_tracking_mode == BUTTON_MODE);
+    PROVIDER_MODE(4, screen->modes.mouse_tracking_mode == MOTION_MODE);
+    PROVIDER_MODE(5, screen->modes.mouse_tracking_mode == ANY_MODE);
+    PROVIDER_MODE(6, screen->modes.mouse_tracking_protocol == SGR_PROTOCOL);
+    PROVIDER_MODE(7, screen->modes.mouse_tracking_protocol == UTF8_PROTOCOL);
+    PROVIDER_MODE(8, screen->modes.mFOCUS_TRACKING);
+    PROVIDER_MODE(9, screen->modes.mALTERNATE_SCROLL);
+    PROVIDER_MODE(10, screen->modes.mDECTCEM);
+    PROVIDER_MODE(11, screen->modes.mDECAWM);
+    PROVIDER_MODE(12, screen->modes.mIRM);
+    PROVIDER_MODE(13, screen->linebuf == screen->alt_linebuf);
+#undef PROVIDER_MODE
+    return Py_BuildValue(
+        "(IIIIIIK)",
+        screen->columns, screen->lines, screen->linebuf == screen->alt_linebuf ? 0u : screen->historybuf->count,
+        screen->cursor->x, screen->cursor->y, modes, screen->suppressed_replies);
+}
+
+static PyObject *
+provider_cell(Screen *screen, PyObject *args) {
+    int y;
+    unsigned int x;
+    if (!PyArg_ParseTuple(args, "iI", &y, &x)) return NULL;
+    if (y >= (int)screen->lines || y < -(int)screen->historybuf->count || x >= screen->columns) {
+        PyErr_SetString(PyExc_IndexError, "provider cell is out of bounds");
+        return NULL;
+    }
+    Line *line = NULL;
+    if (y >= 0) {
+        linebuf_init_line(screen->linebuf, y);
+        line = screen->linebuf->line;
+    } else line = checked_range_line(screen, y);
+    if (!line) {
+        PyErr_SetString(PyExc_IndexError, "provider history cell is unavailable");
+        return NULL;
+    }
+    const CPUCell *cpu = line->cpu_cells + x;
+    const GPUCell *gpu = line->gpu_cells + x;
+    RAII_ListOfChars(chars);
+    text_in_cell(cpu, screen->text_cache, &chars);
+    if ((cpu->is_multicell && (cpu->x || cpu->y)) || (chars.count == 1 && chars.chars[0] == 0)) chars.count = 0;
+    RAII_PyObject(text, PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, chars.chars, chars.count));
+    uint16_t attrs = 0;
+    if (gpu->attrs.bold) attrs |= 1u << 0;
+    if (gpu->attrs.dim) attrs |= 1u << 1;
+    if (gpu->attrs.italic) attrs |= 1u << 2;
+    if (gpu->attrs.decoration) attrs |= 1u << 3;
+    if (gpu->attrs.reverse) attrs |= 1u << 4;
+    if (gpu->attrs.strike) attrs |= 1u << 5;
+    const bool wide = cpu->is_multicell && cpu->x == 0 && cpu->width * cpu->scale > 1;
+    const bool spacer = cpu->is_multicell && cpu->x != 0;
+    return Py_BuildValue(
+        "(OIIHOOO)", text, gpu->fg, gpu->bg, attrs,
+        wide ? Py_True : Py_False, spacer ? Py_True : Py_False,
+        cpu->next_char_was_wrapped ? Py_True : Py_False);
+}
+
+static PyObject *
 multicell_data_as_dict(CPUCell mcd) {
     return Py_BuildValue(
         "{sI sI sI sI sO sI sI}",
@@ -6929,6 +7032,9 @@ test_ch_and_idx(PyObject *self UNUSED, PyObject *val) {
 }
 
 static PyMethodDef methods[] = {
+    {"provider_feed", (PyCFunction)provider_feed, METH_O, "Feed terminal output bytes."},
+    {"provider_snapshot", (PyCFunction)provider_snapshot, METH_NOARGS, "Return provider scalar state."},
+    {"provider_cell", (PyCFunction)provider_cell, METH_VARARGS, "Return one provider cell."},
     METHODB(test_create_write_buffer, METH_NOARGS),
     METHODB(test_commit_write_buffer, METH_VARARGS),
     METHODB(test_parse_written_data, METH_VARARGS),
