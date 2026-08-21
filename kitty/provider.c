@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "provider.h"
 #include <Python.h>
 #include <dlfcn.h>
@@ -5,7 +6,7 @@
 #include <string.h>
 
 typedef int (*FeedScreen)(PyObject *, const uint8_t *, size_t);
-struct KittyProvider { PyObject *screen; FeedScreen feed; };
+struct KittyProvider { PyObject *screen; FeedScreen feed; void *module_handle; };
 static int initialized = 0;
 
 static int failed(void) { if (PyErr_Occurred()) PyErr_Print(); return -1; }
@@ -31,13 +32,17 @@ KittyProvider *kitty_provider_new(uint16_t columns, uint16_t rows, uint32_t scro
     PyObject *module = PyImport_ImportModule("kitty.fast_data_types");
     PyObject *type = module ? PyObject_GetAttrString(module, "Screen") : NULL;
     PyObject *screen = type ? PyObject_CallFunction(type, "OIIIIIKO", Py_None, rows, columns, scrollback, 1u, 1u, 0ull, Py_None) : NULL;
-    Py_XDECREF(type); Py_XDECREF(module);
+    PyObject *module_file = module ? PyObject_GetAttrString(module, "__file__") : NULL;
+    const char *module_path = module_file ? PyUnicode_AsUTF8(module_file) : NULL;
+    void *module_handle = module_path ? dlopen(module_path, RTLD_NOW | RTLD_LOCAL) : NULL;
+    Py_XDECREF(module_file); Py_XDECREF(type); Py_XDECREF(module);
     if (!screen) { failed(); PyGILState_Release(gil); return NULL; }
     KittyProvider *provider = calloc(1, sizeof(*provider));
-    if (!provider) { Py_DECREF(screen); PyGILState_Release(gil); return NULL; }
+    if (!provider) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); PyGILState_Release(gil); return NULL; }
     provider->screen = screen;
-    provider->feed = (FeedScreen)dlsym(RTLD_DEFAULT, "kitty_provider_screen_feed");
-    if (!provider->feed) { Py_DECREF(screen); free(provider); PyGILState_Release(gil); return NULL; }
+    provider->module_handle = module_handle;
+    provider->feed = module_handle ? (FeedScreen)dlsym(module_handle, "kitty_provider_screen_feed") : NULL;
+    if (!provider->feed) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); free(provider); PyGILState_Release(gil); return NULL; }
     PyGILState_Release(gil);
     return provider;
 }
@@ -46,6 +51,7 @@ void kitty_provider_free(KittyProvider *provider) {
     if (provider) {
         PyGILState_STATE gil = PyGILState_Ensure();
         Py_DECREF(provider->screen);
+        if (provider->module_handle) dlclose(provider->module_handle);
         PyGILState_Release(gil);
         free(provider);
     }
