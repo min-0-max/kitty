@@ -41,7 +41,9 @@ KittyProvider *kitty_provider_new(uint16_t columns, uint16_t rows, uint32_t scro
     if (!provider) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); PyGILState_Release(gil); return NULL; }
     provider->screen = screen;
     provider->module_handle = module_handle;
-    provider->feed = module_handle ? (FeedScreen)dlsym(module_handle, "kitty_provider_screen_feed") : NULL;
+    void *feed_symbol = module_handle ? dlsym(module_handle, "kitty_provider_screen_feed") : NULL;
+    _Static_assert(sizeof(provider->feed) == sizeof(feed_symbol), "dlsym pointer size");
+    if (feed_symbol) memcpy(&provider->feed, &feed_symbol, sizeof(provider->feed));
     if (!provider->feed) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); free(provider); PyGILState_Release(gil); return NULL; }
     PyGILState_Release(gil);
     return provider;
