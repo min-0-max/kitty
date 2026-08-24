@@ -36,6 +36,12 @@ class TestBuild(BaseTest):
 
         del fdt, rsync
 
+    def test_provider_bundle_is_invoked_as_a_module(self) -> None:
+        with open('setup.py') as source:
+            setup = source.read()
+        self.assertIn("[sys.executable, '-m', 'kitty.provider_bundle',", setup)
+        self.assertNotIn("[sys.executable, 'kitty/provider_bundle.py',", setup)
+
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build
 
