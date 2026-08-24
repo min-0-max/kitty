@@ -1475,7 +1475,7 @@ def build_kitty_provider_sdk() -> None:
             'executable': sys.executable,
         }, output, sort_keys=True)
     if is_macos:
-        subprocess.check_call([sys.executable, 'kitty/provider_bundle.py', root, os.path.join(package, 'fast_data_types.so')])
+        subprocess.check_call([sys.executable, '-m', 'kitty.provider_bundle', root, os.path.join(package, 'fast_data_types.so')])
     elif is_linux:
         subprocess.check_call([sys.executable, '-m', 'kitty.provider_bundle_linux', root, os.path.join(package, 'fast_data_types.so')])
 
