@@ -50,6 +50,33 @@ class TestBuild(BaseTest):
         self.assertIn("screen->cursor->shape", screen)
         self.assertIn("!screen->cursor->non_blinking", screen)
 
+    def test_provider_feed_exposes_raw_osc_color_overrides(self) -> None:
+        from kitty.fast_data_types import Screen
+
+        screen = Screen(None, 2, 4, 8, 1, 1, 0, None)
+        screen.provider_feed(b"\x1b]10;#112233\x1b\\")
+        screen.provider_feed(b"\x1b]11;rgb:44/55/66\x1b\\")
+        screen.provider_feed(b"\x1b]12;#778899\x1b\\")
+        screen.provider_feed(b"\x1b]4;3;#abcdef\x1b\\")
+
+        foreground, background, cursor, palette = screen.provider_theme_overrides()
+        self.assertEqual(foreground, 0x112233)
+        self.assertEqual(background, 0x445566)
+        self.assertEqual(cursor, 0x778899)
+        self.assertEqual(len(palette), 256)
+        self.assertEqual(palette[3], 0xABCDEF)
+        self.assertIsNone(palette[4])
+
+        screen.provider_feed(b"\x1b]110\x1b\\")
+        screen.provider_feed(b"\x1b]111\x1b\\")
+        screen.provider_feed(b"\x1b]112\x1b\\")
+        screen.provider_feed(b"\x1b]104;3\x1b\\")
+        foreground, background, cursor, palette = screen.provider_theme_overrides()
+        self.assertIsNone(foreground)
+        self.assertIsNone(background)
+        self.assertIsNone(cursor)
+        self.assertIsNone(palette[3])
+
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build
 
