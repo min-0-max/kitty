@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import unittest
 from functools import partial
+from pathlib import Path
 
 from .base import BaseTest
 
@@ -41,6 +42,13 @@ class TestBuild(BaseTest):
             setup = source.read()
         self.assertIn("[sys.executable, '-m', 'kitty.provider_bundle',", setup)
         self.assertNotIn("[sys.executable, 'kitty/provider_bundle.py',", setup)
+
+    def test_provider_snapshot_exposes_engine_cursor_state(self) -> None:
+        header = Path("kitty/provider.h").read_text()
+        screen = Path("kitty/screen.c").read_text()
+        self.assertIn("cursor_shape, cursor_blinking", header)
+        self.assertIn("screen->cursor->shape", screen)
+        self.assertIn("!screen->cursor->non_blinking", screen)
 
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build
