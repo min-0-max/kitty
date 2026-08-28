@@ -6892,9 +6892,10 @@ provider_snapshot(Screen *screen, PyObject *args UNUSED) {
     PROVIDER_MODE(13, screen->linebuf == screen->alt_linebuf);
 #undef PROVIDER_MODE
     return Py_BuildValue(
-        "(IIIIIIK)",
+        "(IIIIIIIIK)",
         screen->columns, screen->lines, screen->linebuf == screen->alt_linebuf ? 0u : screen->historybuf->count,
-        screen->cursor->x, screen->cursor->y, modes, screen->suppressed_replies);
+        screen->cursor->x, screen->cursor->y, modes, screen->cursor->shape,
+        !screen->cursor->non_blinking, screen->suppressed_replies);
 }
 
 static PyObject *

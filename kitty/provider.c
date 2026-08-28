@@ -78,7 +78,7 @@ int kitty_provider_snapshot(KittyProvider *provider, KittyProviderSnapshot *snap
     PyGILState_STATE gil = PyGILState_Ensure();
     PyObject *value = PyObject_CallMethod(provider->screen, "provider_snapshot", NULL);
     unsigned long long suppressed = 0;
-    int ok = value && PyArg_ParseTuple(value, "IIIIIIK", &snapshot->columns, &snapshot->rows, &snapshot->history, &snapshot->cursor_x, &snapshot->cursor_y, &snapshot->modes, &suppressed);
+    int ok = value && PyArg_ParseTuple(value, "IIIIIIIIK", &snapshot->columns, &snapshot->rows, &snapshot->history, &snapshot->cursor_x, &snapshot->cursor_y, &snapshot->modes, &snapshot->cursor_shape, &snapshot->cursor_blinking, &suppressed);
     snapshot->suppressed_replies = suppressed;
     Py_XDECREF(value); int answer = ok ? 0 : failed();
     PyGILState_Release(gil); return answer;

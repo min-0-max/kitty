@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 typedef struct KittyProvider KittyProvider;
-typedef struct { uint32_t columns, rows, history, cursor_x, cursor_y, modes; uint64_t suppressed_replies; } KittyProviderSnapshot;
+typedef struct { uint32_t columns, rows, history, cursor_x, cursor_y, modes, cursor_shape, cursor_blinking; uint64_t suppressed_replies; } KittyProviderSnapshot;
 typedef struct { uint32_t fg, bg; uint16_t attrs; uint8_t wide, spacer, wrapline; } KittyProviderCell;
 
 int kitty_provider_runtime_init(const char *sdk_root);
