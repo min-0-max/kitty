@@ -22,6 +22,7 @@
 #include "data-types.h"
 #include "control-codes.h"
 #include "screen.h"
+#include "colors.h"
 #include "dnd.h"
 #include "state.h"
 #include "iqsort.h"
@@ -41,6 +42,7 @@
 #include "wcswidth.h"
 #include <stdalign.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "keys.h"
 #include "vt-parser.h"
 #include "resize.h"
@@ -3526,6 +3528,48 @@ set_icon(Screen *self, PyObject *icon) {
 
 void
 set_dynamic_color(Screen *self, unsigned int code, PyObject *color) {
+    if (self->provider_mode) {
+        DynamicColor *target = NULL;
+        if (code >= 100) {
+            switch (code - 100) {
+                case 10: target = &self->color_profile->overridden.default_fg; break;
+                case 11: target = &self->color_profile->overridden.default_bg; break;
+                case 12: target = &self->color_profile->overridden.cursor_color; break;
+            }
+            if (target) {
+                target->val = 0;
+                self->color_profile->dirty = true;
+                self->is_dirty = true;
+            }
+            return;
+        }
+        if (!color) return;
+        Py_buffer source;
+        if (PyObject_GetBuffer(color, &source, PyBUF_SIMPLE) != 0) return;
+        const char *data = source.buf;
+        size_t start = 0, length = (size_t)source.len;
+        do {
+            size_t end = start;
+            while (end < length && data[end] != ';') end++;
+            switch (code) {
+                case 10: target = &self->color_profile->overridden.default_fg; break;
+                case 11: target = &self->color_profile->overridden.default_bg; break;
+                case 12: target = &self->color_profile->overridden.cursor_color; break;
+                default: target = NULL; break;
+            }
+            color_type parsed;
+            if (target && !(end - start == 1 && data[start] == '?') && color_from_spec(data + start, end - start, &parsed)) {
+                target->rgb = parsed;
+                target->type = COLOR_IS_RGB;
+                self->color_profile->dirty = true;
+                self->is_dirty = true;
+            }
+            code++;
+            start = end + 1;
+        } while (start <= length);
+        PyBuffer_Release(&source);
+        return;
+    }
     if (color == NULL) {
         CALLBACK("set_dynamic_color", "I", code);
     } else {
@@ -3637,6 +3681,72 @@ screen_history_scroll_to_prompt(Screen *self, int num_of_prompts_to_jump, int sc
 
 void
 set_color_table_color(Screen *self, unsigned int code, PyObject *color) {
+    if (self->provider_mode) {
+        if (!color) return;
+        Py_buffer source;
+        if (PyObject_GetBuffer(color, &source, PyBUF_SIMPLE) != 0) return;
+        const char *data = source.buf;
+        const size_t length = (size_t)source.len;
+        bool changed = false;
+        if (code == 4) {
+            size_t position = 0;
+            while (position < length) {
+                size_t index_end = position;
+                while (index_end < length && data[index_end] != ';') index_end++;
+                if (index_end == length) break;
+                char index_buffer[4];
+                const size_t index_length = index_end - position;
+                if (index_length == 0 || index_length >= sizeof(index_buffer)) break;
+                memcpy(index_buffer, data + position, index_length);
+                index_buffer[index_length] = 0;
+                char *tail = NULL;
+                unsigned long index = strtoul(index_buffer, &tail, 10);
+                size_t color_start = index_end + 1, color_end = color_start;
+                while (color_end < length && data[color_end] != ';') color_end++;
+                if (tail == index_buffer + index_length && index < 256 && !(color_end - color_start == 1 && data[color_start] == '?')) {
+                    color_type parsed;
+                    if (color_from_spec(data + color_start, color_end - color_start, &parsed)) {
+                        self->color_profile->color_table[index] = parsed;
+                        self->color_profile->color_table_overridden[index] = 1;
+                        changed = true;
+                    }
+                }
+                position = color_end + 1;
+            }
+        } else if (code == 104) {
+            if (length == 0) {
+                memcpy(self->color_profile->color_table, self->color_profile->orig_color_table, sizeof(self->color_profile->color_table));
+                memset(self->color_profile->color_table_overridden, 0, sizeof(self->color_profile->color_table_overridden));
+                changed = true;
+            } else {
+                size_t position = 0;
+                while (position < length) {
+                    size_t end = position;
+                    while (end < length && data[end] != ';') end++;
+                    char index_buffer[4];
+                    const size_t index_length = end - position;
+                    if (index_length > 0 && index_length < sizeof(index_buffer)) {
+                        memcpy(index_buffer, data + position, index_length);
+                        index_buffer[index_length] = 0;
+                        char *tail = NULL;
+                        unsigned long index = strtoul(index_buffer, &tail, 10);
+                        if (tail == index_buffer + index_length && index < 256) {
+                            self->color_profile->color_table[index] = self->color_profile->orig_color_table[index];
+                            self->color_profile->color_table_overridden[index] = 0;
+                            changed = true;
+                        }
+                    }
+                    position = end + 1;
+                }
+            }
+        }
+        if (changed) {
+            self->color_profile->dirty = true;
+            self->is_dirty = true;
+        }
+        PyBuffer_Release(&source);
+        return;
+    }
     if (color == NULL) {
         CALLBACK("set_color_table_color", "I", code);
     } else {
@@ -6838,6 +6948,7 @@ test_parse_written_data(Screen *screen, PyObject *args) {
 
 static PyObject *
 provider_feed(Screen *screen, PyObject *input) {
+    screen->provider_mode = true;
     RAII_PY_BUFFER(source);
     if (PyObject_GetBuffer(input, &source, PyBUF_SIMPLE) != 0) return NULL;
     size_t offset = 0;
@@ -6857,6 +6968,7 @@ provider_feed(Screen *screen, PyObject *input) {
 __attribute__((visibility("default"))) int
 kitty_provider_screen_feed(PyObject *screen_object, const uint8_t *data, size_t length) {
     Screen *screen = (Screen *)screen_object;
+    screen->provider_mode = true;
     size_t offset = 0;
     while (offset < length) {
         size_t capacity = 0;
@@ -6896,6 +7008,34 @@ provider_snapshot(Screen *screen, PyObject *args UNUSED) {
         screen->columns, screen->lines, screen->linebuf == screen->alt_linebuf ? 0u : screen->historybuf->count,
         screen->cursor->x, screen->cursor->y, modes, screen->cursor->shape,
         !screen->cursor->non_blinking, screen->suppressed_replies);
+}
+
+static PyObject *
+provider_dynamic_override(ColorProfile *profile, DynamicColor value) {
+    switch (value.type) {
+        case COLOR_IS_RGB: return PyLong_FromUnsignedLong(value.rgb);
+        case COLOR_IS_INDEX: return PyLong_FromUnsignedLong(profile->color_table[value.rgb & 0xff] & 0xffffffu);
+        case COLOR_NOT_SET:
+        case COLOR_IS_SPECIAL: return Py_NewRef(Py_None);
+    }
+    return Py_NewRef(Py_None);
+}
+
+static PyObject *
+provider_theme_overrides(Screen *screen, PyObject *args UNUSED) {
+    RAII_PyObject(foreground, provider_dynamic_override(screen->color_profile, screen->color_profile->overridden.default_fg));
+    RAII_PyObject(background, provider_dynamic_override(screen->color_profile, screen->color_profile->overridden.default_bg));
+    RAII_PyObject(cursor, provider_dynamic_override(screen->color_profile, screen->color_profile->overridden.cursor_color));
+    RAII_PyObject(palette, PyTuple_New(256));
+    if (!foreground || !background || !cursor || !palette) return NULL;
+    for (size_t i = 0; i < 256; i++) {
+        PyObject *value = screen->color_profile->color_table_overridden[i]
+            ? PyLong_FromUnsignedLong(screen->color_profile->color_table[i] & 0xffffffu)
+            : Py_NewRef(Py_None);
+        if (!value) return NULL;
+        PyTuple_SET_ITEM(palette, i, value);
+    }
+    return PyTuple_Pack(4, foreground, background, cursor, palette);
 }
 
 static PyObject *
@@ -7035,6 +7175,7 @@ test_ch_and_idx(PyObject *self UNUSED, PyObject *val) {
 static PyMethodDef methods[] = {
     {"provider_feed", (PyCFunction)provider_feed, METH_O, "Feed terminal output bytes."},
     {"provider_snapshot", (PyCFunction)provider_snapshot, METH_NOARGS, "Return provider scalar state."},
+    {"provider_theme_overrides", (PyCFunction)provider_theme_overrides, METH_NOARGS, "Return provider raw theme override state."},
     {"provider_cell", (PyCFunction)provider_cell, METH_VARARGS, "Return one provider cell."},
     METHODB(test_create_write_buffer, METH_NOARGS),
     METHODB(test_commit_write_buffer, METH_VARARGS),

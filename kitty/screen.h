@@ -152,6 +152,7 @@ typedef struct {
     uint8_t *write_buf;
     size_t write_buf_sz, write_buf_used;
     uint64_t suppressed_replies;
+    bool provider_mode;
     pthread_mutex_t write_buf_lock;
 
     CursorRenderInfo cursor_render_info;

@@ -62,6 +62,8 @@ typedef struct {
 extern PyTypeObject ColorProfile_Type;
 extern PyTypeObject Color_Type;
 
+bool color_from_spec(const char *spec, size_t length, color_type *result);
+
 static inline double
 rgb_luminance(ARGB32 c) {
     // From ITU BT 601 https://www.itu.int/rec/R-REC-BT.601

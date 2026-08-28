@@ -386,6 +386,7 @@ void
 copy_color_profile(ColorProfile *dest, ColorProfile *src) {
     memcpy(dest->color_table, src->color_table, sizeof(dest->color_table));
     memcpy(dest->orig_color_table, src->orig_color_table, sizeof(dest->color_table));
+    memcpy(dest->color_table_overridden, src->color_table_overridden, sizeof(dest->color_table_overridden));
     memcpy(&dest->configured, &src->configured, sizeof(dest->configured));
     memcpy(&dest->overridden, &src->overridden, sizeof(dest->overridden));
     memcpy(dest->overriden_transparent_colors, src->overriden_transparent_colors, sizeof(dest->overriden_transparent_colors));
@@ -669,6 +670,7 @@ static PyObject *
 reset_color_table(ColorProfile *self, PyObject *a UNUSED) {
 #define reset_color_table_doc "Reset all customized colors back to defaults"
     memcpy(self->color_table, self->orig_color_table, sizeof(FG_BG_256));
+    memset(self->color_table_overridden, 0, sizeof(self->color_table_overridden));
     self->dirty = true;
     Py_RETURN_NONE;
 }
@@ -678,6 +680,7 @@ reset_color(ColorProfile *self, PyObject *val) {
 #define reset_color_doc "Reset the specified color"
     uint8_t i = PyLong_AsUnsignedLong(val) & 0xff;
     self->color_table[i] = self->orig_color_table[i];
+    self->color_table_overridden[i] = 0;
     self->dirty = true;
     Py_RETURN_NONE;
 }
@@ -689,6 +692,7 @@ set_color(ColorProfile *self, PyObject *args) {
     unsigned long val;
     if (!PyArg_ParseTuple(args, "Bk", &i, &val)) return NULL;
     self->dirty = true;
+    self->color_table_overridden[i] = 1;
     if (val == NULL_COLOR_VALUE && i >= 16) {
         bool semantic, dynamic = palette_generation_is_dynamic(global_state.options_object, &semantic);
         self->color_table[i] = dynamic ? generate_256_palette_color(self, self->color_table, i, semantic) : GENERATED_COLOR_MASK | FG_BG_256[i];
@@ -719,12 +723,14 @@ push_onto_color_stack_at(ColorProfile *self, unsigned int i) {
     memcpy(self->color_stack[i].transparent_colors, self->overriden_transparent_colors, sizeof(self->overriden_transparent_colors));
     self->color_stack[i].dynamic_colors = self->overridden;
     memcpy(self->color_stack[i].color_table, self->color_table, sizeof(self->color_stack->color_table));
+    memcpy(self->color_stack[i].color_table_overridden, self->color_table_overridden, sizeof(self->color_table_overridden));
 }
 
 static void
 copy_from_color_stack_at(ColorProfile *self, unsigned int i) {
     self->overridden = self->color_stack[i].dynamic_colors;
     memcpy(self->color_table, self->color_stack[i].color_table, sizeof(self->color_table));
+    memcpy(self->color_table_overridden, self->color_stack[i].color_table_overridden, sizeof(self->color_table_overridden));
     memcpy(self->overriden_transparent_colors, self->color_stack[i].transparent_colors, sizeof(self->overriden_transparent_colors));
 }
 
@@ -761,6 +767,7 @@ colorprofile_reset(ColorProfile *self) {
     self->dirty = true;
     self->color_stack_idx = 0;
     zero_at_ptr(&self->overridden);
+    memset(self->color_table_overridden, 0, sizeof(self->color_table_overridden));
     for (unsigned i = 0; i < arraysz(self->overriden_transparent_colors); i++) { zero_at_ptr(self->overriden_transparent_colors + i); }
     for (unsigned i = 0; i < self->color_stack_sz; i++) { zero_at_ptr(self->color_stack + i); }
 }
@@ -876,6 +883,7 @@ reload_from_opts(ColorProfile *self, PyObject *args, PyObject *kw) {
     if (!set_configured_colors(self, opts)) return NULL;
     if (reset_overriden_colors) {
         zero_at_ptr(&self->overridden);
+        memset(self->color_table_overridden, 0, sizeof(self->color_table_overridden));
         memset(self->overriden_transparent_colors, 0, sizeof(self->overriden_transparent_colors));
     }
     if (!set_mark_colors(self, opts)) return NULL;
@@ -1539,6 +1547,17 @@ parse_color(PyTypeObject *type UNUSED, PyObject *pspec) {
         case 'l': return parse_lab(spec + 1, len - 1);
     }
     Py_RETURN_NONE;
+}
+
+bool
+color_from_spec(const char *spec, size_t length, color_type *result) {
+    RAII_PyObject(text, PyUnicode_DecodeUTF8(spec, length, "replace"));
+    if (!text) return false;
+    RAII_PyObject(parsed, parse_color(&Color_Type, text));
+    if (!parsed) return false;
+    if (parsed == Py_None || !PyObject_TypeCheck(parsed, &Color_Type)) return false;
+    *result = ((Color *)parsed)->color.rgb;
+    return true;
 }
 
 static PyMethodDef color_methods[] = {

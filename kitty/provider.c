@@ -84,6 +84,42 @@ int kitty_provider_snapshot(KittyProvider *provider, KittyProviderSnapshot *snap
     PyGILState_Release(gil); return answer;
 }
 
+int kitty_provider_theme_overrides(KittyProvider *provider, KittyProviderThemeOverrides *overrides) {
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject *value = PyObject_CallMethod(provider->screen, "provider_theme_overrides", NULL);
+    PyObject *foreground = NULL, *background = NULL, *cursor = NULL, *palette = NULL;
+    int ok = value && PyArg_ParseTuple(value, "OOOO", &foreground, &background, &cursor, &palette) && PyTuple_Check(palette) && PyTuple_GET_SIZE(palette) == 256;
+    memset(overrides, 0, sizeof(*overrides));
+    PyObject *dynamic[] = {foreground, background, cursor};
+    uint8_t *presence[] = {&overrides->has_foreground, &overrides->has_background, &overrides->has_cursor};
+    uint32_t *colors[] = {&overrides->foreground, &overrides->background, &overrides->cursor};
+    for (size_t i = 0; ok && i < 3; i++) {
+        if (dynamic[i] != Py_None) {
+            unsigned long color = PyLong_AsUnsignedLong(dynamic[i]);
+            if (PyErr_Occurred()) ok = 0;
+            else {
+                *presence[i] = 1;
+                *colors[i] = (uint32_t)color;
+            }
+        }
+    }
+    for (size_t i = 0; ok && i < 256; i++) {
+        PyObject *item = PyTuple_GET_ITEM(palette, i);
+        if (item != Py_None) {
+            unsigned long color = PyLong_AsUnsignedLong(item);
+            if (PyErr_Occurred()) ok = 0;
+            else {
+                overrides->has_palette[i] = 1;
+                overrides->palette[i] = (uint32_t)color;
+            }
+        }
+    }
+    Py_XDECREF(value);
+    int answer = ok ? 0 : failed();
+    PyGILState_Release(gil);
+    return answer;
+}
+
 int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, KittyProviderCell *cell, uint32_t *codepoints, size_t capacity, size_t *required) {
     PyGILState_STATE gil = PyGILState_Ensure();
     PyObject *value = PyObject_CallMethod(provider->screen, "provider_cell", "iI", row, column);
