@@ -1683,6 +1683,27 @@ send_mouse_event(PyObject *self UNUSED, PyObject *args, PyObject *kw) {
 }
 
 static PyObject *
+provider_encode_mouse(PyObject *self UNUSED, PyObject *args) {
+    Screen *screen;
+    int x, y, button, action, mods;
+    if (!PyArg_ParseTuple(args, "O!iiiii", &Screen_Type, &screen, &x, &y, &button, &action, &mods)) return NULL;
+
+    MouseTrackingMode mode = screen->modes.mouse_tracking_mode;
+    if (!(mode == ANY_MODE || (mode == MOTION_MODE && action != MOVE) ||
+            (mode == BUTTON_MODE && (action == PRESS || action == RELEASE)))) {
+        return PyBytes_FromStringAndSize("", 0);
+    }
+    MousePosition position = {.cell_x = x, .cell_y = y};
+    int size = encode_mouse_event_impl(&position, screen->modes.mouse_tracking_protocol, button, action, mods);
+    if (size <= 0) return PyBytes_FromStringAndSize("", 0);
+    char output[sizeof(mouse_event_buf) + 2];
+    output[0] = ESC;
+    output[1] = '[';
+    memcpy(output + 2, mouse_event_buf, (size_t)size);
+    return PyBytes_FromStringAndSize(output, size + 2);
+}
+
+static PyObject *
 test_encode_mouse(PyObject *self UNUSED, PyObject *args) {
     unsigned int x, y;
     int mouse_tracking_protocol, button, action, mods;
@@ -1768,6 +1789,7 @@ test_scale_scroll(PyObject *self UNUSED, PyObject *args) {
 
 static PyMethodDef module_methods[] = {
     {"send_mouse_event", (PyCFunction)(void (*)(void))(send_mouse_event), METH_VARARGS | METH_KEYWORDS, NULL},
+    {"_provider_encode_mouse", provider_encode_mouse, METH_VARARGS, NULL},
     METHODB(test_encode_mouse, METH_VARARGS),
     METHODB(test_scale_scroll, METH_VARARGS),
     METHODB(send_mock_mouse_event_to_window, METH_VARARGS),

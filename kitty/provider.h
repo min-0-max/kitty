@@ -17,4 +17,5 @@ int kitty_provider_feed(KittyProvider *provider, const uint8_t *data, size_t len
 int kitty_provider_resize(KittyProvider *provider, uint16_t columns, uint16_t rows);
 int kitty_provider_snapshot(KittyProvider *provider, KittyProviderSnapshot *snapshot);
 int kitty_provider_theme_overrides(KittyProvider *provider, KittyProviderThemeOverrides *overrides);
+int kitty_provider_pointer(KittyProvider *provider, int32_t column, int32_t row, int32_t button, int32_t action, int32_t modifiers, uint8_t *output, size_t capacity, size_t *required);
 int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, KittyProviderCell *cell, uint32_t *codepoints, size_t capacity, size_t *required);

@@ -6,7 +6,7 @@
 #include <string.h>
 
 typedef int (*FeedScreen)(PyObject *, const uint8_t *, size_t);
-struct KittyProvider { PyObject *screen; FeedScreen feed; void *module_handle; };
+struct KittyProvider { PyObject *screen; PyObject *encode_pointer; FeedScreen feed; void *module_handle; };
 static int initialized = 0;
 
 static int failed(void) { if (PyErr_Occurred()) PyErr_Print(); return -1; }
@@ -33,18 +33,20 @@ KittyProvider *kitty_provider_new(uint16_t columns, uint16_t rows, uint32_t scro
     PyObject *type = module ? PyObject_GetAttrString(module, "Screen") : NULL;
     PyObject *screen = type ? PyObject_CallFunction(type, "OIIIIIKO", Py_None, rows, columns, scrollback, 1u, 1u, 0ull, Py_None) : NULL;
     PyObject *module_file = module ? PyObject_GetAttrString(module, "__file__") : NULL;
+    PyObject *encode_pointer = module ? PyObject_GetAttrString(module, "_provider_encode_mouse") : NULL;
     const char *module_path = module_file ? PyUnicode_AsUTF8(module_file) : NULL;
     void *module_handle = module_path ? dlopen(module_path, RTLD_NOW | RTLD_LOCAL) : NULL;
     Py_XDECREF(module_file); Py_XDECREF(type); Py_XDECREF(module);
-    if (!screen) { failed(); PyGILState_Release(gil); return NULL; }
+    if (!screen || !encode_pointer || !PyCallable_Check(encode_pointer)) { Py_XDECREF(encode_pointer); Py_XDECREF(screen); failed(); PyGILState_Release(gil); return NULL; }
     KittyProvider *provider = calloc(1, sizeof(*provider));
-    if (!provider) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); PyGILState_Release(gil); return NULL; }
+    if (!provider) { if (module_handle) dlclose(module_handle); Py_DECREF(encode_pointer); Py_DECREF(screen); PyGILState_Release(gil); return NULL; }
     provider->screen = screen;
+    provider->encode_pointer = encode_pointer;
     provider->module_handle = module_handle;
     void *feed_symbol = module_handle ? dlsym(module_handle, "kitty_provider_screen_feed") : NULL;
     _Static_assert(sizeof(provider->feed) == sizeof(feed_symbol), "dlsym pointer size");
     if (feed_symbol) memcpy(&provider->feed, &feed_symbol, sizeof(provider->feed));
-    if (!provider->feed) { if (module_handle) dlclose(module_handle); Py_DECREF(screen); free(provider); PyGILState_Release(gil); return NULL; }
+    if (!provider->feed) { if (module_handle) dlclose(module_handle); Py_DECREF(encode_pointer); Py_DECREF(screen); free(provider); PyGILState_Release(gil); return NULL; }
     PyGILState_Release(gil);
     return provider;
 }
@@ -52,6 +54,7 @@ KittyProvider *kitty_provider_new(uint16_t columns, uint16_t rows, uint32_t scro
 void kitty_provider_free(KittyProvider *provider) {
     if (provider) {
         PyGILState_STATE gil = PyGILState_Ensure();
+        Py_DECREF(provider->encode_pointer);
         Py_DECREF(provider->screen);
         if (provider->module_handle) dlclose(provider->module_handle);
         PyGILState_Release(gil);
@@ -118,6 +121,18 @@ int kitty_provider_theme_overrides(KittyProvider *provider, KittyProviderThemeOv
     int answer = ok ? 0 : failed();
     PyGILState_Release(gil);
     return answer;
+}
+
+int kitty_provider_pointer(KittyProvider *provider, int32_t column, int32_t row, int32_t button, int32_t action, int32_t modifiers, uint8_t *output, size_t capacity, size_t *required) {
+    if (!provider || !required) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject *value = PyObject_CallFunction(provider->encode_pointer, "Oiiiii", provider->screen, column, row, button, action, modifiers);
+    if (!value || !PyBytes_Check(value)) { Py_XDECREF(value); int answer = failed(); PyGILState_Release(gil); return answer; }
+    const Py_ssize_t length = PyBytes_GET_SIZE(value);
+    *required = (size_t)length;
+    if (capacity < (size_t)length) { Py_DECREF(value); PyGILState_Release(gil); return 1; }
+    if (length > 0 && output) memcpy(output, PyBytes_AS_STRING(value), (size_t)length);
+    Py_DECREF(value); PyGILState_Release(gil); return 0;
 }
 
 int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, KittyProviderCell *cell, uint32_t *codepoints, size_t capacity, size_t *required) {

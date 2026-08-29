@@ -15,9 +15,15 @@ its RGB value equals the configured base color. OSC reset and terminal reset cle
 well as restoring the effective engine color. Consumers combine this raw engine state with their
 host-owned base theme; they do not parse the input stream a second time.
 
+`_provider_encode_mouse` and `kitty_provider_pointer` expose Kitty's existing live-screen mouse
+encoder. Tracking mode and protocol come from the `Screen`; the provider accepts normalized cell,
+button, action, and modifier facts and returns the complete escape sequence. Consumers do not copy
+Kitty's X10, UTF-8, SGR, or motion encoding rules.
+
 The source ownership check is:
 
 ```sh
 python3 -m unittest kitty_tests.check_build.TestBuild.test_provider_snapshot_exposes_engine_cursor_state
 python3 -m unittest kitty_tests.check_build.TestBuild.test_provider_feed_exposes_raw_osc_color_overrides
+python3 -m unittest kitty_tests.check_build.TestBuild.test_provider_pointer_uses_live_mouse_encoder
 ```
