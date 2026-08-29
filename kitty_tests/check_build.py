@@ -77,6 +77,18 @@ class TestBuild(BaseTest):
         self.assertIsNone(cursor)
         self.assertIsNone(palette[3])
 
+    def test_provider_pointer_uses_live_mouse_encoder(self) -> None:
+        from kitty.fast_data_types import DRAG, MOVE, PRESS, RELEASE, Screen, _provider_encode_mouse
+
+        screen = Screen(None, 40, 120, 1000, 1, 1, 0, None)
+        screen.provider_feed(b"\x1b[?1002h\x1b[?1006h")
+        self.assertEqual(_provider_encode_mouse(screen, 1, 2, 1, PRESS, 0), b"\x1b[<0;2;3M")
+        self.assertEqual(_provider_encode_mouse(screen, 5, 2, 1, DRAG, 0), b"\x1b[<32;6;3M")
+        self.assertEqual(_provider_encode_mouse(screen, 5, 2, 1, RELEASE, 0), b"\x1b[<0;6;3m")
+
+        screen.provider_feed(b"\x1b[?1002l\x1b[?1003h")
+        self.assertEqual(_provider_encode_mouse(screen, 5, 2, 0, MOVE, 0), b"\x1b[<35;6;3M")
+
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build
 
