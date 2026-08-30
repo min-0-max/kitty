@@ -101,9 +101,11 @@ class TestBuild(BaseTest):
         ):
             self.assertIn(symbol, header)
             self.assertIn(symbol, source)
-        self.assertIn("screen_start_selection", source)
-        self.assertIn("screen_update_selection", source)
-        self.assertIn("screen_provider_selection_range", source)
+        screen = Path("kitty/screen.c").read_text()
+        self.assertIn("provider_selection_start", screen)
+        self.assertIn("screen_start_selection", screen)
+        self.assertIn("screen_update_selection", screen)
+        self.assertIn("screen_provider_selection_range", screen)
 
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build

@@ -1,4 +1,3 @@
-#include "screen.h"
 #include "provider.h"
 #include <Python.h>
 #include <dlfcn.h>
@@ -147,33 +146,12 @@ int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, K
     Py_DECREF(value); PyGILState_Release(gil); return 0;
 }
 
-static Screen *provider_screen(KittyProvider *provider) { return (Screen *)provider->screen; }
-
-static unsigned selection_row(Screen *screen, int32_t row, unsigned *saved_scrolled_by) {
-    *saved_scrolled_by = screen->scrolled_by;
-    screen->scrolled_by = row < 0 ? (unsigned)-row : 0;
-    return row < 0 ? 0u : (unsigned)row;
-}
-
 int kitty_provider_selection_start(KittyProvider *provider, int32_t column, int32_t row, int32_t side, int32_t kind) {
     if (!provider || column < 0 || side < 0 || side > 1 || kind < KITTY_PROVIDER_SELECTION_CELL || kind > KITTY_PROVIDER_SELECTION_EXTEND) return -1;
     PyGILState_STATE gil = PyGILState_Ensure();
-    Screen *screen = provider_screen(provider);
-    unsigned saved_scrolled_by = 0;
-    const unsigned y = selection_row(screen, row, &saved_scrolled_by);
-    const bool left = side == 0;
-    if (kind == KITTY_PROVIDER_SELECTION_EXTEND) {
-        screen_update_selection(screen, (index_type)column, y, left, (SelectionUpdate){.set_as_nearest_extend = true});
-    } else {
-        SelectionExtendMode mode = EXTEND_CELL;
-        bool rectangle = false;
-        if (kind == KITTY_PROVIDER_SELECTION_WORD) mode = EXTEND_WORD;
-        else if (kind == KITTY_PROVIDER_SELECTION_LINE) mode = EXTEND_LINE;
-        else if (kind == KITTY_PROVIDER_SELECTION_BLOCK) rectangle = true;
-        screen_start_selection(screen, (index_type)column, y, left, rectangle, mode);
-    }
-    screen->scrolled_by = saved_scrolled_by;
-    const int answer = PyErr_Occurred() ? failed() : 0;
+    PyObject *result = PyObject_CallMethod(provider->screen, "provider_selection_start", "iiii", column, row, side, kind);
+    const int answer = result ? 0 : failed();
+    Py_XDECREF(result);
     PyGILState_Release(gil);
     return answer;
 }
@@ -181,12 +159,9 @@ int kitty_provider_selection_start(KittyProvider *provider, int32_t column, int3
 int kitty_provider_selection_update(KittyProvider *provider, int32_t column, int32_t row, int32_t side) {
     if (!provider || column < 0 || side < 0 || side > 1) return -1;
     PyGILState_STATE gil = PyGILState_Ensure();
-    Screen *screen = provider_screen(provider);
-    unsigned saved_scrolled_by = 0;
-    const unsigned y = selection_row(screen, row, &saved_scrolled_by);
-    screen_update_selection(screen, (index_type)column, y, side == 0, (SelectionUpdate){0});
-    screen->scrolled_by = saved_scrolled_by;
-    const int answer = PyErr_Occurred() ? failed() : 0;
+    PyObject *result = PyObject_CallMethod(provider->screen, "provider_selection_update", "iii", column, row, side);
+    const int answer = result ? 0 : failed();
+    Py_XDECREF(result);
     PyGILState_Release(gil);
     return answer;
 }
@@ -204,7 +179,11 @@ int kitty_provider_selection_clear(KittyProvider *provider) {
 int kitty_provider_selection_text(KittyProvider *provider, uint8_t *output, size_t capacity, size_t *required) {
     if (!provider || !required) return -1;
     PyGILState_STATE gil = PyGILState_Ensure();
-    if (!screen_has_selection(provider_screen(provider))) { *required = 0; PyGILState_Release(gil); return 2; }
+    PyObject *has_selection = PyObject_CallMethod(provider->screen, "has_selection", NULL);
+    const int present = has_selection ? PyObject_IsTrue(has_selection) : -1;
+    Py_XDECREF(has_selection);
+    if (present < 0) { const int answer = failed(); PyGILState_Release(gil); return answer; }
+    if (!present) { *required = 0; PyGILState_Release(gil); return 2; }
     PyObject *parts = PyObject_CallMethod(provider->screen, "text_for_selection", "pp", 0, 1);
     PyObject *separator = parts ? PyUnicode_FromString("") : NULL;
     PyObject *text = separator ? PyUnicode_Join(separator, parts) : NULL;
@@ -221,9 +200,14 @@ int kitty_provider_selection_text(KittyProvider *provider, uint8_t *output, size
 int kitty_provider_selection_range(KittyProvider *provider, int32_t row, uint16_t *start, uint16_t *end) {
     if (!provider || !start || !end) return -1;
     PyGILState_STATE gil = PyGILState_Ensure();
-    index_type first = 0, last = 0;
-    const bool found = screen_provider_selection_range(provider_screen(provider), row, &first, &last);
-    if (found) { *start = (uint16_t)first; *end = (uint16_t)last; }
+    PyObject *range = PyObject_CallMethod(provider->screen, "provider_selection_range", "i", row);
+    if (!range) { const int answer = failed(); PyGILState_Release(gil); return answer; }
+    if (range == Py_None) { Py_DECREF(range); PyGILState_Release(gil); return 1; }
+    unsigned int first = 0, last = 0;
+    const int parsed = PyArg_ParseTuple(range, "II", &first, &last);
+    Py_DECREF(range);
+    if (!parsed || first > UINT16_MAX || last > UINT16_MAX) { const int answer = failed(); PyGILState_Release(gil); return answer; }
+    *start = (uint16_t)first; *end = (uint16_t)last;
     PyGILState_Release(gil);
-    return found ? 0 : 1;
+    return 0;
 }

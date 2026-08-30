@@ -7099,6 +7099,56 @@ provider_cell(Screen *screen, PyObject *args) {
         cpu->next_char_was_wrapped ? Py_True : Py_False);
 }
 
+static unsigned
+provider_selection_row(Screen *screen, int row, unsigned *saved_scrolled_by) {
+    *saved_scrolled_by = screen->scrolled_by;
+    screen->scrolled_by = row < 0 ? (unsigned)-row : 0;
+    return row < 0 ? 0u : (unsigned)row;
+}
+
+static PyObject *
+provider_selection_start(Screen *screen, PyObject *args) {
+    int x, row, side, kind;
+    if (!PyArg_ParseTuple(args, "iiii", &x, &row, &side, &kind) || x < 0 || side < 0 || side > 1 || kind < 0 || kind > 4) return NULL;
+    unsigned saved_scrolled_by = 0;
+    const unsigned y = provider_selection_row(screen, row, &saved_scrolled_by);
+    const bool left = side == 0;
+    if (kind == 4) {
+        screen_update_selection(screen, (index_type)x, y, left, (SelectionUpdate){.set_as_nearest_extend = true});
+    } else {
+        SelectionExtendMode mode = kind == 1 ? EXTEND_WORD : kind == 2 ? EXTEND_LINE : EXTEND_CELL;
+        screen_start_selection(screen, (index_type)x, y, left, kind == 3, mode);
+    }
+    screen->scrolled_by = saved_scrolled_by;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+provider_selection_update(Screen *screen, PyObject *args) {
+    int x, row, side;
+    if (!PyArg_ParseTuple(args, "iii", &x, &row, &side) || x < 0 || side < 0 || side > 1) return NULL;
+    unsigned saved_scrolled_by = 0;
+    const unsigned y = provider_selection_row(screen, row, &saved_scrolled_by);
+    screen_update_selection(screen, (index_type)x, y, side == 0, (SelectionUpdate){0});
+    screen->scrolled_by = saved_scrolled_by;
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+provider_selection_clear(Screen *screen, PyObject *args UNUSED) {
+    clear_selection(&screen->selections);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+provider_selection_range(Screen *screen, PyObject *arg) {
+    const long row = PyLong_AsLong(arg);
+    if (row < INT_MIN || row > INT_MAX || PyErr_Occurred()) return NULL;
+    index_type start = 0, end = 0;
+    if (!screen_provider_selection_range(screen, (int)row, &start, &end)) Py_RETURN_NONE;
+    return Py_BuildValue("II", start, end);
+}
+
 static PyObject *
 multicell_data_as_dict(CPUCell mcd) {
     return Py_BuildValue(
@@ -7199,6 +7249,10 @@ static PyMethodDef methods[] = {
     {"provider_snapshot", (PyCFunction)provider_snapshot, METH_NOARGS, "Return provider scalar state."},
     {"provider_theme_overrides", (PyCFunction)provider_theme_overrides, METH_NOARGS, "Return provider raw theme override state."},
     {"provider_cell", (PyCFunction)provider_cell, METH_VARARGS, "Return one provider cell."},
+    {"provider_selection_start", (PyCFunction)provider_selection_start, METH_VARARGS, "Start a provider selection."},
+    {"provider_selection_update", (PyCFunction)provider_selection_update, METH_VARARGS, "Update a provider selection."},
+    {"provider_selection_clear", (PyCFunction)provider_selection_clear, METH_NOARGS, "Clear the provider selection."},
+    {"provider_selection_range", (PyCFunction)provider_selection_range, METH_O, "Return a selected range for one provider row."},
     METHODB(test_create_write_buffer, METH_NOARGS),
     METHODB(test_commit_write_buffer, METH_VARARGS),
     METHODB(test_parse_written_data, METH_VARARGS),
