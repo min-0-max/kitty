@@ -204,6 +204,7 @@ int kitty_provider_selection_clear(KittyProvider *provider) {
 int kitty_provider_selection_text(KittyProvider *provider, uint8_t *output, size_t capacity, size_t *required) {
     if (!provider || !required) return -1;
     PyGILState_STATE gil = PyGILState_Ensure();
+    if (!screen_has_selection(provider_screen(provider))) { *required = 0; PyGILState_Release(gil); return 2; }
     PyObject *parts = PyObject_CallMethod(provider->screen, "text_for_selection", "pp", 0, 1);
     PyObject *separator = parts ? PyUnicode_FromString("") : NULL;
     PyObject *text = separator ? PyUnicode_Join(separator, parts) : NULL;
