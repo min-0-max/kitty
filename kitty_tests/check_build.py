@@ -89,6 +89,22 @@ class TestBuild(BaseTest):
         screen.provider_feed(b"\x1b[?1002l\x1b[?1003h")
         self.assertEqual(_provider_encode_mouse(screen, 5, 2, 0, MOVE, 0), b"\x1b[<35;6;3M")
 
+    def test_provider_selection_exposes_the_screen_selection_owner(self) -> None:
+        header = Path("kitty/provider.h").read_text()
+        source = Path("kitty/provider.c").read_text()
+        for symbol in (
+            "kitty_provider_selection_start",
+            "kitty_provider_selection_update",
+            "kitty_provider_selection_clear",
+            "kitty_provider_selection_text",
+            "kitty_provider_selection_range",
+        ):
+            self.assertIn(symbol, header)
+            self.assertIn(symbol, source)
+        self.assertIn("screen_start_selection", source)
+        self.assertIn("screen_update_selection", source)
+        self.assertIn("screen_provider_selection_range", source)
+
     def test_slang_build(self) -> None:
         from kitty.shaders.slang import test_slang_build
 

@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#include "screen.h"
 #include "provider.h"
 #include <Python.h>
 #include <dlfcn.h>
@@ -145,4 +145,84 @@ int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, K
     if (capacity < (size_t)length) { Py_DECREF(value); PyGILState_Release(gil); return 1; }
     for (Py_ssize_t i = 0; i < length; i++) codepoints[i] = PyUnicode_ReadChar(text, i);
     Py_DECREF(value); PyGILState_Release(gil); return 0;
+}
+
+static Screen *provider_screen(KittyProvider *provider) { return (Screen *)provider->screen; }
+
+static unsigned selection_row(Screen *screen, int32_t row, unsigned *saved_scrolled_by) {
+    *saved_scrolled_by = screen->scrolled_by;
+    screen->scrolled_by = row < 0 ? (unsigned)-row : 0;
+    return row < 0 ? 0u : (unsigned)row;
+}
+
+int kitty_provider_selection_start(KittyProvider *provider, int32_t column, int32_t row, int32_t side, int32_t kind) {
+    if (!provider || column < 0 || side < 0 || side > 1 || kind < KITTY_PROVIDER_SELECTION_CELL || kind > KITTY_PROVIDER_SELECTION_EXTEND) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    Screen *screen = provider_screen(provider);
+    unsigned saved_scrolled_by = 0;
+    const unsigned y = selection_row(screen, row, &saved_scrolled_by);
+    const bool left = side == 0;
+    if (kind == KITTY_PROVIDER_SELECTION_EXTEND) {
+        screen_update_selection(screen, (index_type)column, y, left, (SelectionUpdate){.set_as_nearest_extend = true});
+    } else {
+        SelectionExtendMode mode = EXTEND_CELL;
+        bool rectangle = false;
+        if (kind == KITTY_PROVIDER_SELECTION_WORD) mode = EXTEND_WORD;
+        else if (kind == KITTY_PROVIDER_SELECTION_LINE) mode = EXTEND_LINE;
+        else if (kind == KITTY_PROVIDER_SELECTION_BLOCK) rectangle = true;
+        screen_start_selection(screen, (index_type)column, y, left, rectangle, mode);
+    }
+    screen->scrolled_by = saved_scrolled_by;
+    const int answer = PyErr_Occurred() ? failed() : 0;
+    PyGILState_Release(gil);
+    return answer;
+}
+
+int kitty_provider_selection_update(KittyProvider *provider, int32_t column, int32_t row, int32_t side) {
+    if (!provider || column < 0 || side < 0 || side > 1) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    Screen *screen = provider_screen(provider);
+    unsigned saved_scrolled_by = 0;
+    const unsigned y = selection_row(screen, row, &saved_scrolled_by);
+    screen_update_selection(screen, (index_type)column, y, side == 0, (SelectionUpdate){0});
+    screen->scrolled_by = saved_scrolled_by;
+    const int answer = PyErr_Occurred() ? failed() : 0;
+    PyGILState_Release(gil);
+    return answer;
+}
+
+int kitty_provider_selection_clear(KittyProvider *provider) {
+    if (!provider) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject *result = PyObject_CallMethod(provider->screen, "clear_selection", NULL);
+    Py_XDECREF(result);
+    const int answer = result ? 0 : failed();
+    PyGILState_Release(gil);
+    return answer;
+}
+
+int kitty_provider_selection_text(KittyProvider *provider, uint8_t *output, size_t capacity, size_t *required) {
+    if (!provider || !required) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyObject *parts = PyObject_CallMethod(provider->screen, "text_for_selection", "pp", 0, 1);
+    PyObject *separator = parts ? PyUnicode_FromString("") : NULL;
+    PyObject *text = separator ? PyUnicode_Join(separator, parts) : NULL;
+    Py_XDECREF(separator); Py_XDECREF(parts);
+    Py_ssize_t length = 0;
+    const char *bytes = text ? PyUnicode_AsUTF8AndSize(text, &length) : NULL;
+    if (!bytes || length < 0) { Py_XDECREF(text); const int answer = failed(); PyGILState_Release(gil); return answer; }
+    *required = (size_t)length;
+    if (capacity < (size_t)length) { Py_DECREF(text); PyGILState_Release(gil); return 1; }
+    if (length > 0 && output) memcpy(output, bytes, (size_t)length);
+    Py_DECREF(text); PyGILState_Release(gil); return 0;
+}
+
+int kitty_provider_selection_range(KittyProvider *provider, int32_t row, uint16_t *start, uint16_t *end) {
+    if (!provider || !start || !end) return -1;
+    PyGILState_STATE gil = PyGILState_Ensure();
+    index_type first = 0, last = 0;
+    const bool found = screen_provider_selection_range(provider_screen(provider), row, &first, &last);
+    if (found) { *start = (uint16_t)first; *end = (uint16_t)last; }
+    PyGILState_Release(gil);
+    return found ? 0 : 1;
 }

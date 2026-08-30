@@ -4473,6 +4473,28 @@ screen_apply_selection(Screen *self, void *address_, size_t size) {
     ec->dirty = false;
 }
 
+bool
+screen_provider_selection_range(Screen *self, int y, index_type *start, index_type *end) {
+    bool found = false;
+    index_type first = self->columns, last = 0;
+    Line *line = checked_range_line(self, y);
+    if (!line) return false;
+    for (size_t i = 0; i < self->selections.count; i++) {
+        IterationData data;
+        iteration_data(self->selections.items + i, &data, self->columns, -(int)self->historybuf->count, 0);
+        if (y < data.y || y >= data.y_limit) continue;
+        const XRange range = xrange_for_iteration_with_multicells(&data, y, line);
+        if (range.x >= range.x_limit) continue;
+        first = MIN(first, range.x);
+        last = MAX(last, range.x_limit - 1);
+        found = true;
+    }
+    if (!found) return false;
+    *start = first;
+    *end = last;
+    return true;
+}
+
 static index_type
 limit_without_trailing_whitespace(const Line *line, index_type limit) {
     if (!limit) return limit;

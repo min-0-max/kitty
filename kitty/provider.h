@@ -9,6 +9,13 @@ typedef struct {
     uint32_t foreground, background, cursor, palette[256];
     uint8_t has_foreground, has_background, has_cursor, has_palette[256];
 } KittyProviderThemeOverrides;
+enum KittyProviderSelectionKind {
+    KITTY_PROVIDER_SELECTION_CELL = 0,
+    KITTY_PROVIDER_SELECTION_WORD = 1,
+    KITTY_PROVIDER_SELECTION_LINE = 2,
+    KITTY_PROVIDER_SELECTION_BLOCK = 3,
+    KITTY_PROVIDER_SELECTION_EXTEND = 4,
+};
 
 int kitty_provider_runtime_init(const char *sdk_root);
 KittyProvider *kitty_provider_new(uint16_t columns, uint16_t rows, uint32_t scrollback);
@@ -19,3 +26,8 @@ int kitty_provider_snapshot(KittyProvider *provider, KittyProviderSnapshot *snap
 int kitty_provider_theme_overrides(KittyProvider *provider, KittyProviderThemeOverrides *overrides);
 int kitty_provider_pointer(KittyProvider *provider, int32_t column, int32_t row, int32_t button, int32_t action, int32_t modifiers, uint8_t *output, size_t capacity, size_t *required);
 int kitty_provider_cell(KittyProvider *provider, int32_t row, uint16_t column, KittyProviderCell *cell, uint32_t *codepoints, size_t capacity, size_t *required);
+int kitty_provider_selection_start(KittyProvider *provider, int32_t column, int32_t row, int32_t side, int32_t kind);
+int kitty_provider_selection_update(KittyProvider *provider, int32_t column, int32_t row, int32_t side);
+int kitty_provider_selection_clear(KittyProvider *provider);
+int kitty_provider_selection_text(KittyProvider *provider, uint8_t *output, size_t capacity, size_t *required);
+int kitty_provider_selection_range(KittyProvider *provider, int32_t row, uint16_t *start, uint16_t *end);

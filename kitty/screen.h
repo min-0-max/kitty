@@ -307,6 +307,7 @@ void select_graphic_rendition(Screen *self, int *params, unsigned int count, boo
 void report_device_status(Screen *self, unsigned int which, bool UNUSED);
 void report_mode_status(Screen *self, unsigned int which, bool);
 void screen_apply_selection(Screen *self, void *address, size_t size);
+bool screen_provider_selection_range(Screen *self, int y, index_type *start, index_type *end);
 bool screen_is_selection_dirty(Screen *self);
 bool screen_has_selection(Screen *);
 bool screen_invert_colors(Screen *self);
